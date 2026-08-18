@@ -1,0 +1,63 @@
+{
+  "id": "flight_info_image_recognition_1",
+  "pluginKey": "@official-plugins/ai-image-to-json",
+  "pluginVersion": "1.0.16",
+  "name": "航班信息图片识别",
+  "description": "从航班信息截图（航班条、行程单）中提取结构化字段：航空公司名称、航班号、舱位代码、起飞日期、起飞时间。",
+  "icon": "",
+  "paramsSchema": {
+    "type": "object",
+    "properties": {
+      "flight_image": {
+        "type": "array",
+        "format": "plugin-image-url",
+        "description": "待识别的航班信息截图（航班条、行程单图片）",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": [
+      "flight_image"
+    ]
+  },
+  "formValue": {
+    "jsonStructure": [
+      {
+        "paramDescription": "航空公司名称，如中国国际航空、东方航空等",
+        "paramType": "String",
+        "name": "airline_name"
+      },
+      {
+        "name": "flight_number",
+        "paramDescription": "航班号，由航空公司二字码加数字组成，如CA1234、MU5678",
+        "paramType": "String"
+      },
+      {
+        "name": "cabin_code",
+        "paramDescription": "舱位代码，通常为单个大写英文字母，如Y、C、F等",
+        "paramType": "String"
+      },
+      {
+        "paramDescription": "起飞日期，格式为YYYY-MM-DD，如2024-05-20",
+        "paramType": "String",
+        "name": "departure_date"
+      },
+      {
+        "name": "departure_time",
+        "paramDescription": "起飞时间，格式为HH:mm，如14:30",
+        "paramType": "String"
+      }
+    ],
+    "modelID": "2015",
+    "modelParams": {
+      "maxTokens": 8192,
+      "temperature": 0.5
+    },
+    "prompt": "你是专业的航班信息识别专家，请从提供的航班截图中准确提取指定字段。请确保信息准确无误，日期统一使用YYYY-MM-DD格式，时间统一使用HH:mm格式，未找到的字段请填空字符串。",
+    "images": "{{input.flight_image}}"
+  },
+  "createdAt": 1786936467496,
+  "updatedAt": 1786936467496,
+  "createdBy": 7583392030584229054
+}
