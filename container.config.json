@@ -1,0 +1,18 @@
+{
+  "containerPort": 3000,
+  "build": {
+    "dockerfilePath": "Dockerfile"
+  },
+  "envVariables": {
+    "NODE_ENV": "production",
+    "ZHIPU_MODEL": "glm-4v-plus",
+    "MOCK_RECOGNIZE": "0"
+  },
+  "runtime": {
+    "envVariables": {
+      "NODE_ENV": "production",
+      "ZHIPU_MODEL": "glm-4v-plus",
+      "MOCK_RECOGNIZE": "0"
+    }
+  }
+}

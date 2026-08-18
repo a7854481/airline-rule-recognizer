@@ -51,3 +51,40 @@ CloudStudio 当前仅支持纯静态，无法跑后端。请把整个项目部�
 - 平台监听端口用环境变量 `PORT`（已支持）。
 
 > 安全提醒：`.env` / `.env.local` 已在 `.gitignore` 中，**切勿提交真实密钥**。前端打包后只调同源 `/api/*`，Key 永不暴露给浏览器。
+
+## 部署到腾讯云 CloudBase（云托管，推荐）
+
+CloudBase **云托管** 是容器化的，**能跑 Node 后端**，正好满足本项目需要（纯 CloudBase 静态托管不行）。
+本项目已准备好 `Dockerfile` + `container.config.json` + `.dockerignore`，按下面步骤即可：
+
+### 前置
+1. 开通 腾讯云 CloudBase（https://console.cloud.tencent.com/tcb），新建一个环境。
+2. 进入「云托管」→「服务」→「新建服务」，服务类型选 **Web 服务**。
+
+### 方式一：代码仓库一键部署（推荐）
+1. 把项目推到 GitHub/GitLab（注意 `.env` 已被 .gitignore 忽略，不会上传）。
+2. CloudBase 云托管「新建服务」时选择「代码仓库」，授权并选中本仓库。
+3. 构建配置：
+   - **Dockerfile 路径**：`Dockerfile`（已提供）
+   - **监听端口**：`3000`
+   - **环境变量**：新增 `ZHIPU_API_KEY`，值填你的智谱 Key（**这里填，别写进代码**）；
+     还可选 `ZHIPU_MODEL`（默认 `glm-4v-plus`，省钱可改 `glm-4v-flash`）、`MOCK_RECOGNIZE=0`。
+4. 提交后 CloudBase 会自动 `docker build` 并部署，完成后给一个公网域名即可访问。
+
+### 方式二：本地登录 CLI 部署
+```bash
+npm i -g @cloudbase/cli
+tcb login                 # 浏览器扫码授权
+tcb env:list              # 记下环境 ID
+tcb run:deploy --envId <你的环境ID>   # 按提示选「云托管」并绑定本目录
+```
+
+### 验证
+- 打开分配的域名，粘贴一张票规截图 → 应返回结构化 JSON 并被前端解析展示。
+- 若识别报错，先看浏览器控制台 / CloudBase 云托管日志里的错误信息：
+  - `图片过大…` → 截图超 3.5MB，按提示压缩（前端已自动压缩，正常不会出现）。
+  - `API Key 无效` → 检查环境变量 `ZHIPU_API_KEY` 是否填对。
+  - `额度/限流` → 智谱免费额度用尽或太快，稍后重试或换模型。
+
+### 费用
+云托管按实际容器运行时长/资源计费，低流量几乎免费；也可设最小实例数为 0（无访问时不计费）。
