@@ -50,8 +50,16 @@ const VALID_ZHIPU_MODELS = [
 const ZHIPU_MODEL_RAW = (process.env.ZHIPU_MODEL || '').trim().toLowerCase()
 const ZHIPU_MODEL = VALID_ZHIPU_MODELS.includes(ZHIPU_MODEL_RAW) ? ZHIPU_MODEL_RAW : 'glm-4.6v-flash'
 
-if (!ZHIPU_API_KEY) {
-  console.warn('[警告] 未设置 ZHIPU_API_KEY 环境变量，识别接口将返回错误。请先配置密钥。')
+// ===== 飞书 OCR（免费版）通道 =====
+// 飞书免费版 optical_char_recognition 仅返回纯文字数组（text_list），无表格行列结构，
+// 且对免费租户有较严的 QPS/配额限制（实测频繁返回 99991400 限流）。
+// 因此本通道定位为：飞书负责"识文字"，再由智谱把文字秒级整理成结构化 JSON（文本输入小、不撞 504）。
+// 飞书一旦限流/失败，自动回退智谱直接识图。
+const FEISHU_APP_ID = process.env.FEISHU_APP_ID || ''
+const FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET || ''
+
+if (!ZHIPU_API_KEY && !(FEISHU_APP_ID && FEISHU_APP_SECRET)) {
+  console.warn('[警告] 未配置 ZHIPU_API_KEY 也未配置 FEISHU_APP_ID/SECRET，识别接口将返回错误。')
 }
 
 const app = express()
@@ -197,6 +205,46 @@ async function callZhipu(messages) {
   return stripCodeFence(content)
 }
 
+// ===== 飞书 OCR 通道 =====
+let _feishuToken = null
+let _feishuTokenExpire = 0
+async function getFeishuToken() {
+  const now = Date.now()
+  if (_feishuToken && now < _feishuTokenExpire - 60_000) return _feishuToken
+  const resp = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ app_id: FEISHU_APP_ID, app_secret: FEISHU_APP_SECRET }),
+  })
+  const j = await resp.json().catch(() => ({}))
+  if (j.code !== 0 || !j.tenant_access_token) {
+    throw new Error('飞书获取 tenant_access_token 失败：' + (j.msg || JSON.stringify(j)))
+  }
+  _feishuToken = j.tenant_access_token
+  _feishuTokenExpire = now + (j.expire || 7200) * 1000
+  return _feishuToken
+}
+
+// 返回 OCR 拼接后的纯文字；失败抛错（由调用方决定回退）
+async function feishuOcr(dataUrl) {
+  const token = await getFeishuToken()
+  const comma = dataUrl.indexOf(',')
+  const b64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl
+  const resp = await fetch('https://open.feishu.cn/open-apis/optical_char_recognition/v1/image/basic_recognize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+    body: JSON.stringify({ image: b64, data_type: 'base64' }),
+  })
+  const j = await resp.json().catch(() => ({}))
+  if (j.code !== 0) {
+    const err = new Error('飞书OCR失败（' + j.code + '）：' + (j.msg || JSON.stringify(j)))
+    err.code = j.code
+    throw err
+  }
+  const textList = j.data?.text_list || []
+  return textList.join('\n')
+}
+
 // base64 data URL → 估算字节数（用于拦截过大图片，避免打到智谱才报 400）
 function estimateBase64Bytes(dataUrl) {
   try {
@@ -273,20 +321,59 @@ app.post('/api/recognize', async (req, res) => {
       return res.json({ text: mock, success: true })
     }
 
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      {
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: image } },
-          { type: 'text', text: userText },
-        ],
-      },
-    ]
+    // ===== 混合识别：飞书 OCR 优先，智谱视觉兜底 =====
+    // 飞书免费版 OCR 只返回纯文字（无表格结构）、且可能限流；
+    // 因此飞书负责"识文字"，智谱负责"把文字整理成结构化 JSON"（文本输入小、秒回、不触发 504）。
+    // 若飞书失败/限流/返回空，则直接用智谱视觉识别原图。
+    let rawText = null
+    let source = 'zhipu'
+    if (FEISHU_APP_ID && FEISHU_APP_SECRET && !MOCK_RECOGNIZE) {
+      try {
+        const ocrText = await feishuOcr(image)
+        if (ocrText && ocrText.trim().length >= 8) {
+          const textMessages = [
+            { role: 'system', content: systemPrompt },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text:
+                    (mode === 'focus' && targetCabin
+                      ? buildFocusPrompt(String(targetCabin).toUpperCase())
+                      : buildTextPrompt()) +
+                    '\n\n【飞书OCR识别出的原始文字】\n' +
+                    ocrText,
+                },
+              ],
+            },
+          ]
+          rawText = await callZhipu(textMessages)
+          source = 'feishu'
+          console.log('[识别] 飞书OCR成功，交由智谱结构化')
+        }
+      } catch (fe) {
+        console.warn('[识别] 飞书OCR失败，回退智谱直识：', fe?.message || fe)
+      }
+    }
 
-    const rawText = await callZhipu(messages)
+    if (!rawText) {
+      const messages = [
+        { role: 'system', content: systemPrompt },
+        {
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: image } },
+            { type: 'text', text: userText },
+          ],
+        },
+      ]
+      rawText = await callZhipu(messages)
+      source = 'zhipu'
+    }
+
     // 返回原始文本，前端已有的 parseAiResultToRule 负责解析，保证"识别+解析"解耦
-    res.json({ text: rawText, success: true })
+    res.json({ text: rawText, success: true, source })
   } catch (err) {
     console.error('[识别失败]', err?.message || err)
     res.status(500).json({ error: err?.message || '识别失败', success: false })
@@ -322,14 +409,6 @@ app.post('/api/recognize-flight', async (req, res) => {
 - "airline_name": 航司全称（如"东方航空""中国国航"），识别不到留空
 请务必准确，数字/字母与票面严格一致。`
 
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      {
-        role: 'user',
-        content: [{ type: 'image_url', image_url: { url: image } }, { type: 'text', text: '请识别这张航班截图。' }],
-      },
-    ]
-
     if (MOCK_RECOGNIZE) {
       const mock = JSON.stringify({
         flight_number: 'GT1012',
@@ -341,8 +420,36 @@ app.post('/api/recognize-flight', async (req, res) => {
       return res.json({ text: mock, success: true })
     }
 
-    const rawText = await callZhipu(messages)
-    res.json({ text: rawText, success: true })
+    let rawText = null
+    let source = 'zhipu'
+    if (FEISHU_APP_ID && FEISHU_APP_SECRET) {
+      try {
+        const ocrText = await feishuOcr(image)
+        if (ocrText && ocrText.trim().length >= 8) {
+          const textMessages = [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: [{ type: 'text', text: '请识别这段航班信息文字：\n' + ocrText }] },
+          ]
+          rawText = await callZhipu(textMessages)
+          source = 'feishu'
+          console.log('[航班识别] 飞书OCR成功，交由智谱结构化')
+        }
+      } catch (fe) {
+        console.warn('[航班识别] 飞书OCR失败，回退智谱直识：', fe?.message || fe)
+      }
+    }
+    if (!rawText) {
+      const messages = [
+        { role: 'system', content: systemPrompt },
+        {
+          role: 'user',
+          content: [{ type: 'image_url', image_url: { url: image } }, { type: 'text', text: '请识别这张航班截图。' }],
+        },
+      ]
+      rawText = await callZhipu(messages)
+      source = 'zhipu'
+    }
+    res.json({ text: rawText, success: true, source })
   } catch (err) {
     console.error('[航班识别失败]', err?.message || err)
     res.status(500).json({ error: err?.message || '航班识别失败', success: false })
@@ -391,5 +498,5 @@ if (fs.existsSync(distDir)) {
 
 app.listen(PORT, () => {
   console.log(`票规识别服务已启动: http://localhost:${PORT}`)
-  console.log(`  模型: ${ZHIPU_MODEL} | 密钥: ${ZHIPU_API_KEY ? '已配置' : '❌ 未配置'}`)
+  console.log(`  模型: ${ZHIPU_MODEL} | 智谱密钥: ${ZHIPU_API_KEY ? '已配置' : '❌ 未配置'} | 飞书OCR: ${FEISHU_APP_ID ? '已配置' : '未配置'}`)
 })
