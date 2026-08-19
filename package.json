@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "bash scripts/build.sh",
+    "build:selfhost": "vite build --outDir dist && node scripts/postbuild.mjs",
     "start": "node server.js",
     "typecheck": "tsc -p tsconfig.app.json",
     "lint": "concurrently npm:typecheck npm:lint:eslint",

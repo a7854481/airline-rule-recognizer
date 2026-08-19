@@ -21,7 +21,8 @@ RUN npm install --no-save --ignore-scripts \
 
 # 拷源码并在镜像内构建前端（保证 dist/ 与代码一致）
 COPY . .
-RUN npx vite build --outDir dist
+# build:selfhost = vite build + postbuild（清平台占位符与监控脚本）
+RUN npx vite build --outDir dist && node scripts/postbuild.mjs
 
 # CloudBase 注入 PORT 环境变量（server.js 已兼容）；默认容器监听 3000
 ENV PORT=3000
