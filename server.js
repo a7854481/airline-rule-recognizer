@@ -132,21 +132,39 @@ function stripCodeFence(text) {
 }
 
 async function callZhipu(messages) {
-  const resp = await fetch(ZHIPU_API_BASE, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${ZHIPU_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: ZHIPU_MODEL,
-      messages,
-      temperature: 0.1,
-      max_tokens: 2048,
-      // 让模型尽量输出 JSON
-      response_format: { type: 'json_object' },
-    }),
-  })
+  // 智谱视觉模型处理大图/复杂表可能耗时较长，CloudBase nginx 网关上游默认 60s。
+  // 这里 55s 早断，避免前端收到模糊的 504 Gateway Timeout，改成明确的"识别超时"。
+  const TIMEOUT_MS = 55_000
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  let resp
+  try {
+    resp = await fetch(ZHIPU_API_BASE, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ZHIPU_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: ZHIPU_MODEL,
+        messages,
+        temperature: 0.1,
+        max_tokens: 1500,
+        // 让模型尽量输出 JSON
+        response_format: { type: 'json_object' },
+      }),
+      signal: controller.signal,
+    })
+  } catch (err) {
+    clearTimeout(timer)
+    if (err && (err.name === 'AbortError' || err.code === 'ABORT_ERR')) {
+      const e = new Error(`识别耗时超过 ${TIMEOUT_MS / 1000} 秒（图片过大或模型繁忙）。请将截图裁小（建议宽度 ≤ 1500px）后重试，或改用 glm-4.6v-flashx 高速模型。`)
+      e.code = 504
+      throw e
+    }
+    throw err
+  }
+  clearTimeout(timer)
 
   if (!resp.ok) {
     let detail = ''
@@ -200,14 +218,15 @@ app.post('/api/recognize', async (req, res) => {
     if (!image || typeof image !== 'string') {
       return res.status(400).json({ error: '缺少图片数据（image 字段，base64 或 data URL）。' })
     }
-    // 提前拦截过大图片：智谱对输入长度有限制，过大直接 400 input length too long
+    // 提前拦截过大图片：智谱对输入长度有限制，过大直接 400 input length too long；
+    // 另外大图处理慢，容易撞 CloudBase 网关 60s 上游超时，所以提前卡到 2MB。
     const imgBytes = estimateBase64Bytes(image)
-    if (imgBytes > 3_500_000) {
+    if (imgBytes > 2_000_000) {
       return res.status(400).json({
         error:
           '图片过大（约 ' +
           (imgBytes / 1024 / 1024).toFixed(1) +
-          'MB），请压缩或裁剪到 3.5MB 以内后重试。',
+          'MB），请压缩或裁剪到 2MB 以内后重试。建议截图宽度 ≤ 1500px、保留关键信息区。',
       })
     }
 

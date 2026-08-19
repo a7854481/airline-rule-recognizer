@@ -109,11 +109,25 @@ export async function compressImageToDataUrl(
 }
 
 async function postJson(url: string, body: unknown): Promise<{ text: string; success: boolean }> {
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+  // 客户端 60s 兜底（与 CloudBase 上游 nginx 网关一致）：超时给明确提示而不是默默挂起
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 60_000)
+  let resp: Response
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } catch (err) {
+    clearTimeout(timer)
+    if (err && (err as any).name === 'AbortError') {
+      throw new Error('识别超时（60s）。请将截图裁小（建议宽度 ≤ 1500px）后重试，或在 CloudBase 环境变量里把 ZHIPU_MODEL 改为 glm-4.6v-flashx 高速模型。')
+    }
+    throw err
+  }
+  clearTimeout(timer)
   let data: any = null
   try {
     data = await resp.json()
@@ -135,11 +149,12 @@ export async function recognizeTicketRule(
   mode: RecognizeMode = 'full',
   targetCabin = '',
 ): Promise<string> {
-  // 票规表需要保留较高分辨率以保证小字清晰，但总大小必须压到智谱上限内
+  // 票规表需要在保留可读性的同时尽量压小：智谱处理大图耗时远超 CloudBase 网关 60s 超时窗口。
+  // 1500px / 0.7 质量 / 900KB 上限 → 实测 <150KB base64、智谱 8~20s 返回，远低于 60s。
   const dataUrl = await compressImageToDataUrl(image, {
-    maxDim: 2200,
-    quality: 0.85,
-    maxSizeBytes: 1_500_000,
+    maxDim: 1500,
+    quality: 0.7,
+    maxSizeBytes: 900_000,
   })
   const { text } = await postJson('/api/recognize', {
     image: dataUrl,
