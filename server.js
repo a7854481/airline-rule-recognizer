@@ -31,10 +31,24 @@ const ZHIPU_API_KEY = process.env.ZHIPU_API_KEY || ''
 const MOCK_RECOGNIZE = process.env.MOCK_RECOGNIZE === '1'
 const ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
 // 模型名白名单：自动 trim + 转小写，避免 CloudBase 环境变量误填（大写/空格/拼写错）
-// 导致智谱返回 400 "modelCode：不存在"。不在白名单时兜底到免费的 glm-4v-flash（所有账号必可用）。
-const VALID_ZHIPU_MODELS = ['glm-4v-plus', 'glm-4v', 'glm-4v-flash']
+// 导致智谱返回 400 "modelCode：不存在"。不在白名单时兜底到免费的 glm-4.6v-flash（所有账号必可用）。
+// 智谱 2026 年已把视觉模型统一升级到 GLM-4.6V 系列，旧的 glm-4v-plus/4v/4v-flash 大概率已下线。
+//  - glm-4.6v          高性能版（106B），消耗资源包
+//  - glm-4.6v-flashx   轻量高速版（9B），计费
+//  - glm-4.6v-flash    完全免费（推荐默认）
+//  - glm-5v-turbo      旗舰多模态，计费
+const VALID_ZHIPU_MODELS = [
+  'glm-4.6v',
+  'glm-4.6v-flashx',
+  'glm-4.6v-flash',
+  'glm-5v-turbo',
+  // 旧模型保留兜底（如账号仍能调）
+  'glm-4v-plus',
+  'glm-4v',
+  'glm-4v-flash',
+]
 const ZHIPU_MODEL_RAW = (process.env.ZHIPU_MODEL || '').trim().toLowerCase()
-const ZHIPU_MODEL = VALID_ZHIPU_MODELS.includes(ZHIPU_MODEL_RAW) ? ZHIPU_MODEL_RAW : 'glm-4v-flash'
+const ZHIPU_MODEL = VALID_ZHIPU_MODELS.includes(ZHIPU_MODEL_RAW) ? ZHIPU_MODEL_RAW : 'glm-4.6v-flash'
 
 if (!ZHIPU_API_KEY) {
   console.warn('[警告] 未设置 ZHIPU_API_KEY 环境变量，识别接口将返回错误。请先配置密钥。')
