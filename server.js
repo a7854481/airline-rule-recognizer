@@ -30,8 +30,11 @@ const ZHIPU_API_KEY = process.env.ZHIPU_API_KEY || ''
 // 用于在无 API Key 或断网时验证「识别→解析→展示」整条链路是否准确。生产请勿开启。
 const MOCK_RECOGNIZE = process.env.MOCK_RECOGNIZE === '1'
 const ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
-// 默认用 glm-4v-plus（准确，支持多图）；想省费用可改成 glm-4v-flash（免费，单图）
-const ZHIPU_MODEL = process.env.ZHIPU_MODEL || 'glm-4v-plus'
+// 模型名白名单：自动 trim + 转小写，避免 CloudBase 环境变量误填（大写/空格/拼写错）
+// 导致智谱返回 400 "modelCode：不存在"。不在白名单时兜底到免费的 glm-4v-flash（所有账号必可用）。
+const VALID_ZHIPU_MODELS = ['glm-4v-plus', 'glm-4v', 'glm-4v-flash']
+const ZHIPU_MODEL_RAW = (process.env.ZHIPU_MODEL || '').trim().toLowerCase()
+const ZHIPU_MODEL = VALID_ZHIPU_MODELS.includes(ZHIPU_MODEL_RAW) ? ZHIPU_MODEL_RAW : 'glm-4v-flash'
 
 if (!ZHIPU_API_KEY) {
   console.warn('[警告] 未设置 ZHIPU_API_KEY 环境变量，识别接口将返回错误。请先配置密钥。')
